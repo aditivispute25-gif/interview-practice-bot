@@ -89,28 +89,63 @@ Keep your tone positive, encouraging, and concise. Avoid overly complex jargon.
 
     try:
         # Strip any accidental whitespace from the API key
-        clean_api_key = api_key.strip()
+        clean_api_key = api_key.strip().strip('"').strip("'")
         genai.configure(api_key=clean_api_key)
 
-        # Use active, currently supported Gemini models (gemini-2.0-flash or gemini-1.5-flash)
-        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash"]
-        last_error = None
+        # 1. Discover models directly from Google for this specific API key
+        discovered_models = []
+        try:
+            for m in genai.list_models():
+                if "generateContent" in getattr(m, "supported_generation_methods", []):
+                    name = m.name.replace("models/", "")
+                    discovered_models.append(name)
+        except Exception:
+            pass
 
-        for model_name in candidate_models:
+        # Preferred models in priority order
+        preferred_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+
+        # Place preferred models that exist at the front of the list
+        ordered_models = [m for m in preferred_models if m in discovered_models]
+        # Append any remaining discovered models
+        for m in discovered_models:
+            if m not in ordered_models:
+                ordered_models.append(m)
+
+        # Fallback to standard list if discovery was not permitted
+        if not ordered_models:
+            ordered_models = preferred_models
+
+        last_error = None
+        attempt_log = []
+
+        for model_name in ordered_models:
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
-                if response and hasattr(response, "text"):
+                if response and hasattr(response, "text") and response.text:
                     return response.text
             except Exception as e:
                 last_error = e
+                attempt_log.append(f"{model_name}: {str(e)}")
                 continue
 
         if last_error:
-            raise last_error
+            st.error(f"Error calling Gemini API: {last_error}")
+            with st.expander("🔍 Diagnostic Details"):
+                st.write("**Models attempted:**")
+                for log_entry in attempt_log:
+                    st.code(log_entry)
+                st.info(
+                    "💡 **Quick fixes:**\n"
+                    "1. Double check your API key in **Streamlit App Settings -> Secrets**.\n"
+                    "   Make sure it looks like `GEMINI_API_KEY = \"AIzaSy...\"`.\n"
+                    "2. If needed, create a fresh free key at [Google AI Studio](https://aistudio.google.com/)."
+                )
+            return None
 
     except Exception as error:
-        st.error(f"Error calling Gemini API: {error}")
+        st.error(f"Error initializing Gemini: {error}")
         return None
 
 
@@ -176,6 +211,9 @@ def main():
                     st.success("Analysis complete!")
                     st.markdown("### 📋 Evaluation Report")
                     st.markdown(feedback)
+
+    st.divider()
+    st.caption("🚀 Build: Dynamic Model Resolver v1.2 | MEXT Interview Practice Bot")
 
 
 if __name__ == "__main__":
