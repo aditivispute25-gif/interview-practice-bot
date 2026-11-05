@@ -89,15 +89,23 @@ Keep your tone positive, encouraging, and concise. Avoid overly complex jargon.
 
     try:
         genai.configure(api_key=api_key)
-        # Use gemini-1.5-flash for fast and reliable feedback
-        try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt)
-        except Exception:
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            response = model.generate_content(prompt)
+        
+        # gemini-3.8-flash is the current recommended model
+        candidate_models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+        last_error = None
 
-        return response.text
+        for model_name in candidate_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                last_error = e
+                continue
+
+        if last_error:
+            raise last_error
+
     except Exception as error:
         st.error(f"Error calling Gemini API: {error}")
         return None
