@@ -4,6 +4,12 @@ A Generative AI practice web app and CLI tool written in Python to help students
 
 ---
 
+## 🌐 Live Demo
+Try the live web application on Streamlit Community Cloud:
+👉 **[Launch Live Demo](https://interview-practice-botgit-jywabghjc6uutkqdvt375u.streamlit.app/)**
+
+---
+
 ## 📌 Project Overview
 Preparing for a scholarship interview can be challenging. This tool helps you:
 1. Select your difficulty level (**Beginner** or **Experienced**) using an interactive radio selector.
