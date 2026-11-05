@@ -88,17 +88,20 @@ Keep your tone positive, encouraging, and concise. Avoid overly complex jargon.
 """
 
     try:
-        genai.configure(api_key=api_key)
-        
-        # gemini-3.8-flash is the current recommended model
-        candidate_models = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-1.5-flash"]
+        # Strip any accidental whitespace from the API key
+        clean_api_key = api_key.strip()
+        genai.configure(api_key=clean_api_key)
+
+        # Use active, currently supported Gemini models (gemini-2.0-flash or gemini-1.5-flash)
+        candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash"]
         last_error = None
 
         for model_name in candidate_models:
             try:
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(prompt)
-                return response.text
+                if response and hasattr(response, "text"):
+                    return response.text
             except Exception as e:
                 last_error = e
                 continue
