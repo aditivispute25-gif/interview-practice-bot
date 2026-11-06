@@ -12,14 +12,17 @@ Try the live web application on Streamlit Community Cloud:
 
 ## 📌 Project Overview
 Preparing for a scholarship interview can be challenging. This tool helps you:
-1. Select your difficulty level (**Beginner** or **Experienced**) using an interactive radio selector.
-2. Receive a realistic MEXT scholarship interview question.
-3. Type and submit your answer directly in a text area.
-4. Receive AI-powered feedback from Google Gemini on:
+1. Select your difficulty level (**Beginner** or **Experienced**).
+2. Practice a **10-question interview simulation**, picked randomly without repeats from a dedicated question bank (`questions.py`).
+3. Track your progress with a dynamic question counter (e.g., **"Question 3 of 10"**).
+4. Type and submit your answer directly in the text area for each question.
+5. Receive **Score Cards** (scores out of 10 for Grammar, Clarity, and Content) using `st.columns` and `st.metric`.
+6. Review clean, structured feedback organized in collapsible expanders (`st.expander`):
    - **English Grammar & Vocabulary**
    - **Clarity of Thought**
    - **What was Good (Strengths)**
    - **What Can Improve (Actionable Advice)**
+7. Progress seamlessly through the 10 questions using the **"Next Question"** flow.
 
 ---
 
@@ -81,19 +84,22 @@ interview-practice-bot/
 ├── .env.example       # Template for API keys
 ├── .gitignore          # Tells Git to ignore sensitive files (.env)
 ├── requirements.txt    # Required Python libraries (streamlit, google-generativeai, python-dotenv)
-├── app.py              # Streamlit Web Application
-├── main.py             # Terminal / CLI version
+├── questions.py        # Question bank (10+ Beginner and 10+ Experienced MEXT questions)
+├── app.py              # Streamlit Web Application (10-question flow, score cards, clean feedback)
+├── main.py             # Streamlit Cloud entry point
 └── README.md           # Project documentation
 ```
 
 ---
 
 ## 💡 How to Explain this in an Interview / Viva
-1. **Frontend with Streamlit**:
-   - `st.radio`: Multi-choice toggle for interview difficulty levels.
-   - `st.text_area`: Multi-line text input for user answers.
-   - `st.button`: Triggers the analysis and displays progress with `st.spinner`.
-2. **Dual-Source Secret Management**:
-   - `get_api_key()` checks `st.secrets` first (for cloud hosting), then falls back to `os.getenv` via `python-dotenv` (for local development).
-3. **Structured AI Prompting**:
-   - Directs Google Gemini (`gemini-1.5-flash`) to return 4 structured sections (Grammar, Clarity, Strengths, Improvements) rather than unstructured text.
+1. **Separation of Concerns**:
+   - `questions.py`: Decouples the question data from UI logic, making it easy to add or edit questions without touching application code.
+2. **State Management (`st.session_state`)**:
+   - Persists the 10 selected questions, user answers, and generated feedback across Streamlit reruns.
+3. **Structured Prompting & Score Cards**:
+   - Instructs Google Gemini to return structured scores and evaluations.
+   - `st.columns` and `st.metric` display the score cards cleanly at a glance.
+   - `st.expander` organizes the detailed feedback sections so the page is easy to read.
+4. **Clean Output Filtering**:
+   - Filters out any internal AI reasoning/preambles (Role, Target, Constraint, Plan) before rendering to the user.
