@@ -359,6 +359,21 @@ REQUIRED JSON FORMAT:
         return None
 
 
+def get_score_color(score: int) -> str:
+    """
+    Returns design rule color based on score:
+      7 to 10 = teal (#14B8A6)
+      4 to 6 = amber (#F59E0B)
+      1 to 3 = soft red (#EF4444)
+    """
+    if score >= 7:
+        return "#14B8A6"
+    elif score >= 4:
+        return "#F59E0B"
+    else:
+        return "#EF4444"
+
+
 def init_interview_session(level: str):
     """
     Initializes or resets the interview session state:
@@ -492,32 +507,44 @@ def main():
     current_idx = st.session_state.current_question_index
     total_q = len(st.session_state.selected_questions)
 
-    # Progress Indicator
-    st.caption(f"📌 **Question {current_idx + 1} of {total_q}**")
+    # SECTION 2: INTERVIEW ROOM
+    # Progress Indicator: small label "Question X of 10" with progress bar at top
+    st.markdown(
+        f'<div style="font-size: 0.9rem; font-weight: 600; color: #64748B; margin-bottom: 0.25rem;">Question {current_idx + 1} of {total_q}</div>',
+        unsafe_allow_html=True,
+    )
     st.progress((current_idx + 1) / total_q)
 
-    # Step 2: Display Current Interview Question
+    # Current Interview Question inside one large, clean card
     current_question = st.session_state.selected_questions[current_idx]
-    st.subheader("Step 2: Interview Question")
-    st.info(f"**Q{current_idx + 1}:** {current_question}")
+    st.markdown(
+        f"""
+        <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.5rem; margin-top: 1.25rem; margin-bottom: 1.5rem;">
+            <div style="font-size: 1.2rem; font-weight: 600; color: #172554; line-height: 1.5;">{current_question}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Step 3: User's typed response
-    st.subheader("Step 3: Type Your Answer")
+    # Small label "Your answer" above the answer box
+    st.markdown(
+        '<div style="font-size: 0.95rem; font-weight: 600; color: #172554; margin-bottom: 0.4rem;">Your answer</div>',
+        unsafe_allow_html=True,
+    )
     text_area_key = f"answer_input_{current_idx}"
     default_text = st.session_state.answers.get(current_idx, "")
 
     answer = st.text_area(
-        label="Type your response below (take your time and express your thoughts):",
+        label="Your answer",
         value=default_text,
-        placeholder="For example: I want to study AI in Japan because of their world-class robotics research...",
+        placeholder="Type your answer here (take your time and express your thoughts)...",
         height=180,
         key=text_area_key,
+        label_visibility="collapsed",
     )
 
-    # Step 4: Feedback & Score Card
-    st.subheader("Step 4: AI Evaluation & Score Card")
+    # API key detection check
     api_key = get_api_key()
-
     if not api_key:
         st.warning(
             "⚠️ **Gemini API Key not detected!**\n\n"
@@ -525,8 +552,8 @@ def main():
             "- **Streamlit Cloud:** Add `GEMINI_API_KEY` in Streamlit App Settings -> Secrets."
         )
 
-    # Button: Get AI Feedback
-    if st.button("🚀 Get AI Feedback", type="primary", use_container_width=True):
+    # Button: Get Feedback (blue, full width)
+    if st.button("Get Feedback", type="primary", use_container_width=True):
         if not answer.strip():
             st.warning("Please type your answer before requesting feedback.")
         elif not api_key:
@@ -545,7 +572,7 @@ def main():
                     st.session_state.answers[current_idx] = answer.strip()
                     st.session_state.feedbacks[current_idx] = feedback
 
-    # Render Feedback if available for this question
+    # SECTION 3: AI SCORE CARDS & EVALUATION
     if current_idx in st.session_state.feedbacks:
         fb = st.session_state.feedbacks[current_idx]
 
@@ -560,15 +587,72 @@ def main():
                 f"| Model: `{t['model']}`"
             )
 
-        # 4. Score Card: 3 metric cards at top
-        st.markdown("#### 📊 Score Card")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Grammar", f"{fb['grammar_score']}/10")
-        col2.metric("Clarity", f"{fb['clarity_score']}/10")
-        col3.metric("Content", f"{fb['content_score']}/10")
+        # Above scores: heading "Your Score" (no numbering)
+        st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>Your Score</h3>", unsafe_allow_html=True)
 
-        # 5 Expandable Sections
-        st.markdown("#### 📝 Detailed Feedback")
+        # Grammar, Clarity and Content as 3 cards in a row (st.columns), colored by score
+        col1, col2, col3 = st.columns(3)
+
+        grammar_score = fb["grammar_score"]
+        clarity_score = fb["clarity_score"]
+        content_score = fb["content_score"]
+
+        with col1:
+            st.markdown(
+                f"""
+                <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Grammar</div>
+                    <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(grammar_score)}; line-height: 1;">{grammar_score}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with col2:
+            st.markdown(
+                f"""
+                <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Clarity</div>
+                    <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(clarity_score)}; line-height: 1;">{clarity_score}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with col3:
+            st.markdown(
+                f"""
+                <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Content</div>
+                    <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(content_score)}; line-height: 1;">{content_score}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # Under the cards: one short "Overall" line with average score and one-sentence summary
+        avg_score = round((grammar_score + clarity_score + content_score) / 3.0, 1)
+        if avg_score >= 7.0:
+            summary_text = "Strong response demonstrating solid interview readiness and clear motivation."
+            overall_color = "#14B8A6"
+        elif avg_score >= 4.0:
+            summary_text = "Fair response with good fundamentals, but needs more depth and specificity."
+            overall_color = "#F59E0B"
+        else:
+            summary_text = "Needs significant improvement in substance and relevance to meet MEXT standards."
+            overall_color = "#EF4444"
+
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border-left: 4px solid {overall_color}; border-radius: 4px; padding: 0.75rem 1rem; margin-top: 0.75rem; margin-bottom: 1.5rem;">
+                <span style="font-weight: 700; color: #172554;">Overall: {avg_score}/10</span> — <span style="color: #475569;">{summary_text}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Detailed Feedback heading without numbering
+        st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>Detailed Feedback</h3>", unsafe_allow_html=True)
         with st.expander("📝 English Grammar & Vocabulary", expanded=True):
             st.write(fb["grammar_feedback"])
 
@@ -586,9 +670,9 @@ def main():
 
         st.divider()
 
-        # Step 5: Next Question or Session Completion
+        # Next Question navigation or Session Completion
         if current_idx < total_q - 1:
-            if st.button("➡️ Next Question", type="primary", use_container_width=True):
+            if st.button("Next Question", type="primary", use_container_width=True):
                 st.session_state.current_question_index += 1
                 st.rerun()
         else:
