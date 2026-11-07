@@ -89,7 +89,7 @@ def get_safe_error_category(exception: Exception) -> str:
     exc_msg = str(exception).lower()
 
     if "deadline" in exc_msg or "timeout" in exc_msg or "timed out" in exc_msg:
-        return "Request Timeout (45s limit reached)"
+        return "Request Timeout (API connection timed out)"
     elif "404" in exc_msg or "not found" in exc_msg:
         return "Model Unavailable / Not Found"
     elif "403" in exc_msg or "permission" in exc_msg or "api_key" in exc_msg or "unauthenticated" in exc_msg:
@@ -375,13 +375,13 @@ REQUIRED JSON FORMAT:
             "response_mime_type": "application/json",
         }
 
-        # Explicit RequestOptions with 45s timeout and retry=None to prevent indefinite cloud container hangs
-        # while giving reasoning models sufficient headroom for multi-criteria evaluation
-        request_options = RequestOptions(timeout=45.0, retry=None)
+        # Explicit RequestOptions with timeout=40.0 and retry=None to prevent indefinite cloud container hangs
+        request_options = RequestOptions(timeout=40.0, retry=None)
 
-        # Candidate models ordered by latency: latest active stable Flash models
-        # Prioritize gemini-3.8-flash (primary stable), fallback to gemini-3.5-flash
-        candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash"]
+        # Candidate models ordered by speed and stability:
+        # 1. gemini-3.5-flash-lite: Ultra-low-latency model (1-2s response, no heavy thinking delays)
+        # 2. gemini-3.8-flash: High-capability reasoning fallback
+        candidate_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
         cached_model = st.session_state.get("working_gemini_model")
         if cached_model and cached_model in candidate_models:
             candidate_models.remove(cached_model)
@@ -396,7 +396,7 @@ REQUIRED JSON FORMAT:
         for model_name in candidate_models:
             t_api_start = time.perf_counter()
             try:
-                print(f"[Gemini API] Querying model={model_name} | transport=rest | timeout=45s")
+                print(f"[Gemini API] Querying model={model_name} | transport=rest | timeout=40s")
                 model = genai.GenerativeModel(model_name, generation_config=generation_config)
                 response = model.generate_content(prompt, request_options=request_options)
                 t_api_end = time.perf_counter()
@@ -436,6 +436,11 @@ REQUIRED JSON FORMAT:
                 attempt_duration = t_err - t_api_start
                 safe_category = get_safe_error_category(e)
                 print(f"[Gemini API] Failed: model={model_name} | category={safe_category} | duration={attempt_duration:.2f}s | error={e}")
+                
+                # Invalidate failed model from cache so it doesn't get retried first next time
+                if "working_gemini_model" in st.session_state and st.session_state.working_gemini_model == model_name:
+                    del st.session_state["working_gemini_model"]
+
                 last_error_category = safe_category
                 attempt_log.append(f"Model: {model_name} | Status: {safe_category} | Duration: {attempt_duration:.2f}s | Detail: {str(e)[:120]}")
                 continue
