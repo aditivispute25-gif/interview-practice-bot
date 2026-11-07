@@ -89,7 +89,7 @@ def get_safe_error_category(exception: Exception) -> str:
     exc_msg = str(exception).lower()
 
     if "deadline" in exc_msg or "timeout" in exc_msg or "timed out" in exc_msg:
-        return "Request Timeout (15s limit reached)"
+        return "Request Timeout (45s limit reached)"
     elif "404" in exc_msg or "not found" in exc_msg:
         return "Model Unavailable / Not Found"
     elif "403" in exc_msg or "permission" in exc_msg or "api_key" in exc_msg or "unauthenticated" in exc_msg:
@@ -239,8 +239,9 @@ REQUIRED JSON FORMAT:
             "response_mime_type": "application/json",
         }
 
-        # Explicit RequestOptions with 15s timeout and retry=None to strictly disable automatic multi-minute retries
-        request_options = RequestOptions(timeout=15.0, retry=None)
+        # Explicit RequestOptions with 45s timeout and retry=None to prevent indefinite cloud container hangs
+        # while giving reasoning models sufficient headroom for multi-criteria evaluation
+        request_options = RequestOptions(timeout=45.0, retry=None)
 
         # Candidate models ordered by latency: latest active stable Flash models
         # Prioritize gemini-3.8-flash (primary stable), fallback to gemini-3.5-flash
@@ -259,7 +260,7 @@ REQUIRED JSON FORMAT:
         for model_name in candidate_models:
             t_api_start = time.perf_counter()
             try:
-                print(f"[Gemini API] Querying model={model_name} | transport=rest | timeout=15s")
+                print(f"[Gemini API] Querying model={model_name} | transport=rest | timeout=45s")
                 model = genai.GenerativeModel(model_name, generation_config=generation_config)
                 response = model.generate_content(prompt, request_options=request_options)
                 t_api_end = time.perf_counter()
