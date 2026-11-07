@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import google.generativeai as genai
+from google.generativeai.types import RequestOptions
 
 # Import question bank from separate questions.py file
 from questions import get_questions_for_level
@@ -79,11 +80,36 @@ def clean_text_content(text: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
+def get_safe_error_category(exception: Exception) -> str:
+    """
+    Categorizes exceptions into safe, standardized error descriptions
+    without exposing raw exception text or sensitive server details.
+    """
+    exc_type = type(exception).__name__
+    exc_msg = str(exception).lower()
+
+    if "deadline" in exc_msg or "timeout" in exc_msg or "timed out" in exc_msg:
+        return "Request Timeout (15s limit reached)"
+    elif "404" in exc_msg or "not found" in exc_msg:
+        return "Model Unavailable / Not Found"
+    elif "403" in exc_msg or "permission" in exc_msg or "api_key" in exc_msg or "unauthenticated" in exc_msg:
+        return "Authentication / API Key Error"
+    elif "429" in exc_msg or "quota" in exc_msg or "resource_exhausted" in exc_msg:
+        return "API Quota / Rate Limit Exceeded"
+    elif "connection" in exc_msg or "dns" in exc_msg or "network" in exc_msg:
+        return "Network / Connection Error"
+    else:
+        return f"{exc_type} (Service Error)"
+
+
 def parse_feedback_response(response_text: str) -> dict:
     """
-    Parses the Gemini output into structured scores and feedback sections.
-    Guarantees valid scores (out of 10) and clean text for all 4 feedback sections.
+    Parses the Gemini output into structured scores and 5 feedback sections.
+    Guarantees valid scores (out of 10) and clean text for all feedback sections.
+    Raises ValueError if response cannot be parsed into structured feedback.
     """
+    import re
+
     cleaned = response_text.strip()
 
     # Strip code block fences if returned by model
@@ -101,70 +127,99 @@ def parse_feedback_response(response_text: str) -> dict:
     if start != -1 and end != -1:
         try:
             data = json.loads(cleaned[start : end + 1])
+            grammar_score = min(10, max(1, int(data.get("grammar_score", 5))))
+            clarity_score = min(10, max(1, int(data.get("clarity_score", 5))))
+            content_score = min(10, max(1, int(data.get("content_score", 5))))
+
             return {
-                "grammar_score": min(10, max(1, int(data.get("grammar_score", 7)))),
-                "clarity_score": min(10, max(1, int(data.get("clarity_score", 7)))),
-                "content_score": min(10, max(1, int(data.get("content_score", 7)))),
+                "grammar_score": grammar_score,
+                "clarity_score": clarity_score,
+                "content_score": content_score,
                 "grammar_feedback": clean_text_content(data.get("grammar_feedback", "")),
                 "clarity_feedback": clean_text_content(data.get("clarity_feedback", "")),
+                "relevance_feedback": clean_text_content(data.get("relevance_feedback", "")),
                 "strengths": clean_text_content(data.get("strengths", "")),
                 "improvements": clean_text_content(data.get("improvements", "")),
             }
         except Exception:
             pass
 
-    # Fallback structure if response is plain text
-    clean_fallback = clean_text_content(cleaned)
-    return {
-        "grammar_score": 7,
-        "clarity_score": 7,
-        "content_score": 7,
-        "grammar_feedback": "Review sentence construction and verb tenses for better fluency.",
-        "clarity_feedback": clean_fallback if clean_fallback else "Your answer was understandable and directly on topic.",
-        "strengths": "Demonstrates genuine motivation and interest in studying AI in Japan.",
-        "improvements": "Add specific examples linking your background to your future academic goals.",
-    }
+    # Regex extraction fallback for malformed JSON
+    def extract_val(pattern: str, text: str) -> str:
+        m = re.search(pattern, text, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    grammar_fb = extract_val(r'"grammar_feedback"\s*:\s*"([^"]+)"', cleaned)
+    clarity_fb = extract_val(r'"clarity_feedback"\s*:\s*"([^"]+)"', cleaned)
+    relevance_fb = extract_val(r'"relevance_feedback"\s*:\s*"([^"]+)"', cleaned)
+    strengths_fb = extract_val(r'"strengths"\s*:\s*"([^"]+)"', cleaned)
+    improvements_fb = extract_val(r'"improvements"\s*:\s*"([^"]+)"', cleaned)
+
+    if grammar_fb or relevance_fb or strengths_fb or improvements_fb:
+        return {
+            "grammar_score": 6,
+            "clarity_score": 6,
+            "content_score": 5,
+            "grammar_feedback": clean_text_content(grammar_fb) if grammar_fb else "Grammar evaluated.",
+            "clarity_feedback": clean_text_content(clarity_fb) if clarity_fb else "Clarity evaluated.",
+            "relevance_feedback": clean_text_content(relevance_fb) if relevance_fb else "Relevance evaluated.",
+            "strengths": clean_text_content(strengths_fb) if strengths_fb else "No relevant strengths demonstrated.",
+            "improvements": clean_text_content(improvements_fb) if improvements_fb else "Please review question requirements.",
+        }
+
+    # If completely unparseable, do NOT invent fake positive praise
+    raise ValueError("Model response could not be parsed into structured interview feedback.")
 
 
 def evaluate_interview_answer(api_key: str, question: str, answer: str) -> dict:
     """
     Calls Gemini API with performance instrumentation using time.perf_counter().
-    Optimizations applied:
-      - Directly calls fast flash models without redundant list_models() round-trips.
-      - Uses generation_config (JSON mime type, max_output_tokens, low temperature).
-      - Measures prep time, API latency, parse time, and total time accurately.
+    Evaluates candidate's actual latest answer strictly against the interview question.
     Returns:
-        dict: Parsed evaluation containing scores, clean feedback sections, and timings.
+        dict: Parsed evaluation containing scores, clean 5 feedback sections, and timings.
     """
     global _CONFIGURED_API_KEY
     t_start = time.perf_counter()
 
     prompt = f"""
-You are an expert, encouraging MEXT scholarship interview coach.
-A student is practicing for their MEXT scholarship interview.
+You are an expert, objective MEXT scholarship interview evaluator.
+Evaluate the candidate's actual submitted answer strictly against the specific interview question asked.
 
 Interview Question:
 "{question}"
 
-Student's Answer:
+Candidate's Submitted Answer:
 "{answer}"
 
-Provide constructive feedback and evaluate the response.
-
-CRITICAL RULES:
-1. Output ONLY valid JSON matching the format below.
-2. Do NOT output any preamble, role notes, target audience notes, constraints, or section outlines.
-3. Keep the tone encouraging, concise, and beginner-friendly (1-2 sentences per feedback section).
+STRICT EVALUATION INSTRUCTIONS:
+1. SPECIFICITY: Base your evaluation solely on the candidate's actual submitted answer. Do not assume or invent facts not present in their response.
+2. RELEVANCE & CONTENT:
+   - Critically evaluate whether the answer directly addresses the specific question asked.
+   - Detect if the answer is irrelevant, off-topic, incomplete, weak, dismissive, hostile, or shows a lack of interest in the scholarship/topic.
+   - If the answer is off-topic, inappropriate, or shows a lack of motivation/interest, assign a low Content score (1-4/10) and explicitly explain why in "relevance_feedback".
+3. OBJECTIVE STRENGTHS (NO FAKE OR GENERIC PRAISE):
+   - Highlight genuine strengths ONLY when they are actually present in the candidate's response.
+   - If the answer is weak, inappropriate, dismissive, or irrelevant, state clearly: "No relevant strengths were demonstrated in this response."
+   - Never generate generic positive praise (such as claiming passion for AI or Japan) if the candidate did not actually express it.
+4. INDEPENDENT GRAMMAR EVALUATION:
+   - Evaluate English grammar independently from content or attitude.
+   - If an answer is grammatically well-formed but inappropriate or off-topic, assign a high Grammar score (8-10/10) and do NOT invent grammar mistakes.
+   - If there are grammatical/vocabulary errors, point them out specifically with corrected phrasing.
+5. ACTIONABLE IMPROVEMENT:
+   - Provide concrete, question-specific advice explaining how a strong MEXT candidate should structure an answer to THIS specific question.
+6. FORMAT & CONCISENESS:
+   - Output ONLY valid JSON matching the exact schema below. Keep each section focused and concise (1-2 sentences).
 
 REQUIRED JSON FORMAT:
 {{
-  "grammar_score": 8,
-  "clarity_score": 9,
-  "content_score": 7,
-  "grammar_feedback": "Point out any grammatical mistakes and show the corrected sentence. Suggest better vocabulary.",
-  "clarity_feedback": "Explain if the answer was easy to understand, direct, and stayed on topic.",
-  "strengths": "Highlight specific strengths, passion, or strong points shown in the answer.",
-  "improvements": "1-2 actionable tips to make this answer more convincing for MEXT evaluators."
+  "grammar_score": <integer 1-10>,
+  "clarity_score": <integer 1-10>,
+  "content_score": <integer 1-10>,
+  "grammar_feedback": "Accurate assessment of grammar, syntax, and vocabulary. Do not invent errors if grammar is correct.",
+  "clarity_feedback": "Assessment of sentence clarity, organization, and directness.",
+  "relevance_feedback": "Direct evaluation of whether and how well the answer addresses this specific question. Call out off-topic or inappropriate responses.",
+  "strengths": "Genuine strengths observed, or 'No relevant strengths were demonstrated in this response.' if weak or inappropriate.",
+  "improvements": "Specific, actionable tips tailored directly to answering this question effectively."
 }}
 """
 
@@ -172,17 +227,20 @@ REQUIRED JSON FORMAT:
         # Strip accidental whitespace or quotes from API key safely
         clean_api_key = api_key.strip().strip('"').strip("'")
 
-        # Configure SDK only when key changes to prevent client re-initialization lag
+        # Configure SDK with REST transport to prevent gRPC proxy hangs on cloud containers
         if _CONFIGURED_API_KEY != clean_api_key:
-            genai.configure(api_key=clean_api_key)
+            genai.configure(api_key=clean_api_key, transport="rest")
             _CONFIGURED_API_KEY = clean_api_key
 
         # Optimized generation parameters for lower latency
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 600,
+            "max_output_tokens": 700,
             "response_mime_type": "application/json",
         }
+
+        # Explicit RequestOptions with 15s timeout and retry=None to strictly disable automatic multi-minute retries
+        request_options = RequestOptions(timeout=15.0, retry=None)
 
         # Candidate models ordered by latency: latest active stable Flash models
         # Prioritize gemini-3.8-flash (primary stable), fallback to gemini-3.5-flash
@@ -195,16 +253,18 @@ REQUIRED JSON FORMAT:
         t_prep_end = time.perf_counter()
         prep_time_ms = (t_prep_end - t_start) * 1000
 
-        last_error = None
+        last_error_category = None
         attempt_log = []
 
         for model_name in candidate_models:
+            t_api_start = time.perf_counter()
             try:
-                t_api_start = time.perf_counter()
+                print(f"[Gemini API] Querying model={model_name} | transport=rest | timeout=15s")
                 model = genai.GenerativeModel(model_name, generation_config=generation_config)
-                response = model.generate_content(prompt)
+                response = model.generate_content(prompt, request_options=request_options)
                 t_api_end = time.perf_counter()
                 api_time_s = t_api_end - t_api_start
+                print(f"[Gemini API] Success: model={model_name} | duration={api_time_s:.2f}s")
 
                 if response and hasattr(response, "text") and response.text:
                     t_parse_start = time.perf_counter()
@@ -228,19 +288,25 @@ REQUIRED JSON FORMAT:
                     return parsed
 
             except Exception as e:
-                last_error = e
-                attempt_log.append(f"{model_name}: {str(e)}")
+                t_err = time.perf_counter()
+                attempt_duration = t_err - t_api_start
+                safe_category = get_safe_error_category(e)
+                print(f"[Gemini API] Failed: model={model_name} | category={safe_category} | duration={attempt_duration:.2f}s")
+                last_error_category = safe_category
+                attempt_log.append(f"Model: {model_name} | Status: {safe_category} | Duration: {attempt_duration:.2f}s")
                 continue
 
-        if last_error:
-            st.error(f"Error calling Gemini API: {last_error}")
+        if last_error_category:
+            st.error(f"Error calling Gemini API: {last_error_category}")
             with st.expander("🔍 Diagnostic Details"):
                 for entry in attempt_log:
-                    st.code(entry)
+                    st.write(f"- {entry}")
             return None
 
     except Exception as error:
-        st.error(f"Error initializing Gemini: {error}")
+        safe_init_category = get_safe_error_category(error)
+        print(f"[Gemini API] Initialization failed | category={safe_init_category}")
+        st.error(f"Error initializing Gemini: {safe_init_category}")
         return None
 
 
@@ -375,7 +441,7 @@ def main():
         col2.metric("Clarity", f"{fb['clarity_score']}/10")
         col3.metric("Content", f"{fb['content_score']}/10")
 
-        # 4 Expandable Sections
+        # 5 Expandable Sections
         st.markdown("#### 📝 Detailed Feedback")
         with st.expander("📝 English Grammar & Vocabulary", expanded=True):
             st.write(fb["grammar_feedback"])
@@ -383,7 +449,10 @@ def main():
         with st.expander("🎯 Clarity of Answer", expanded=True):
             st.write(fb["clarity_feedback"])
 
-        with st.expander("🌟 What was Good (Strengths)", expanded=True):
+        with st.expander("📌 Relevance to the Question", expanded=True):
+            st.write(fb.get("relevance_feedback", "Evaluated based on relevance to the specific interview question."))
+
+        with st.expander("🌟 What Was Good (Strengths)", expanded=True):
             st.write(fb["strengths"])
 
         with st.expander("🚀 What Can Improve", expanded=True):
