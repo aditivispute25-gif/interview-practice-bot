@@ -371,6 +371,7 @@ def init_interview_session(level: str):
     st.session_state.answers = {}
     st.session_state.feedbacks = {}
     st.session_state.active_level = level
+    st.session_state.interview_started = True
 
 
 def main():
@@ -381,34 +382,110 @@ def main():
         layout="centered",
     )
 
-    st.title("🎓 MEXT Scholarship Interview Practice Bot")
-    st.write(
-        "Practice answering 10 authentic MEXT scholarship interview questions, one at a time. "
-        "Receive instant AI score cards and structured feedback to improve your interview performance."
+    # Custom CSS for Design Rules:
+    # White background (#FFFFFF), navy headings (#172554), blue primary buttons (#3B82F6),
+    # teal for positive feedback (#14B8A6), amber for improvements (#F59E0B), light grey cards (#F8FAFC)
+    # No animations, no pink accents, mobile and desktop responsive
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background-color: #FFFFFF;
+            color: #172554;
+        }
+        h1, h2, h3, h4, h5, h6 {
+            color: #172554 !important;
+            font-weight: 700 !important;
+        }
+        button[kind="primary"], .stButton > button[kind="primary"] {
+            background-color: #3B82F6 !important;
+            border-color: #3B82F6 !important;
+            color: #FFFFFF !important;
+            border-radius: 6px !important;
+            font-weight: 600 !important;
+        }
+        button[kind="primary"]:hover {
+            background-color: #2563EB !important;
+            border-color: #2563EB !important;
+        }
+        div[data-testid="stExpander"] {
+            background-color: #F8FAFC !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 8px !important;
+        }
+        * {
+            animation: none !important;
+            transition: none !important;
+        }
+        button[kind="primary"] {
+            transition: background-color 0.15s ease-in-out !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.divider()
+    # Initialize interview session flags
+    if "interview_started" not in st.session_state:
+        st.session_state.interview_started = False
+    if "active_level" not in st.session_state:
+        st.session_state.active_level = "Beginner"
 
-    # Step 1: Choose Difficulty Level
-    st.subheader("Step 1: Choose Your Level")
-    level = st.radio(
-        "Select your interview difficulty level:",
-        options=["Beginner", "Experienced"],
-        horizontal=True,
-        help="Beginner focuses on foundational questions; Experienced focuses on research methodology and societal impact.",
-    )
+    # SECTION 1: Welcome / Dashboard Screen
+    if not st.session_state.interview_started:
+        st.title("🎓 MEXT Scholarship Interview Practice Bot")
+        st.markdown(
+            """
+            Master your MEXT scholarship interview with realistic questions and instant AI feedback.  
+            Choose your experience level below and click **Start Interview** to begin your 10-question practice session.
+            """
+        )
 
-    # Initialize or reset interview if level changes or first visit
-    if "selected_questions" not in st.session_state or st.session_state.get("active_level") != level:
-        init_interview_session(level)
+        st.markdown(
+            """
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.25rem; margin-top: 1rem; margin-bottom: 1.25rem;">
+                <h4 style="color: #172554; margin: 0 0 0.5rem 0;">Choose Difficulty Level</h4>
+                <p style="color: #475569; font-size: 0.95rem; margin-bottom: 0.75rem; line-height: 1.5;">
+                    • <b>Beginner:</b> Foundational motivation, Japanese culture, university choices, and study planning.<br>
+                    • <b>Experienced:</b> In-depth research methodology, academic contribution, challenges, and bilateral diplomacy.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # Sidebar: Restart & Progress Controls
+        selected_level = st.radio(
+            "Select your interview difficulty level:",
+            options=["Beginner", "Experienced"],
+            index=0 if st.session_state.active_level == "Beginner" else 1,
+            horizontal=True,
+        )
+
+        st.write("")
+        if st.button("🚀 Start Interview", type="primary", use_container_width=True):
+            init_interview_session(selected_level)
+            st.rerun()
+
+        with st.sidebar:
+            st.header("⚙️ Session Controls")
+            st.write("Welcome! Choose your level and start your practice interview.")
+            st.caption("10 randomly selected authentic MEXT interview questions.")
+
+        return
+
+    # INTERVIEW IN PROGRESS (Displayed only after clicking Start Interview)
+    level = st.session_state.active_level
+
+    # Sidebar: Restart & Navigation Controls
     with st.sidebar:
         st.header("⚙️ Interview Controls")
         st.write(f"**Level:** {level}")
         st.write(f"**Progress:** Question {st.session_state.current_question_index + 1} of 10")
         if st.button("🔄 Restart Interview (New 10 Questions)", use_container_width=True):
             init_interview_session(level)
+            st.rerun()
+        if st.button("🏠 Exit to Welcome Screen", use_container_width=True):
+            st.session_state.interview_started = False
             st.rerun()
 
     # Check current question
@@ -520,6 +597,9 @@ def main():
             st.write("You have practiced a full MEXT scholarship interview simulation.")
             if st.button("🔄 Start a New Interview Session", type="primary", use_container_width=True):
                 init_interview_session(level)
+                st.rerun()
+            if st.button("🏠 Exit to Welcome Screen", use_container_width=True):
+                st.session_state.interview_started = False
                 st.rerun()
 
     st.divider()
