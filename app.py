@@ -98,15 +98,49 @@ def get_safe_error_category(exception: Exception) -> str:
         return "API Quota / Rate Limit Exceeded"
     elif "connection" in exc_msg or "dns" in exc_msg or "network" in exc_msg:
         return "Network / Connection Error"
+    elif "max_tokens" in exc_msg or "finish_reason" in exc_msg:
+        return "Token Limit Exceeded"
+    elif "parse" in exc_msg or "json" in exc_msg or "valueerror" in exc_msg:
+        return "Response Parsing Error"
     else:
         return f"{exc_type} (Service Error)"
+
+
+def extract_response_text(response) -> str:
+    """
+    Safely extracts text content from GenerateContentResponse,
+    bypassing property errors caused by finish-reason flags or multiple parts.
+    """
+    if not response:
+        return ""
+
+    # 1. Inspect candidate parts directly
+    if hasattr(response, "candidates") and response.candidates:
+        candidate = response.candidates[0]
+        if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+            collected = []
+            for part in candidate.content.parts:
+                part_text = getattr(part, "text", "")
+                if part_text:
+                    collected.append(part_text)
+            if collected:
+                return "\n".join(collected).strip()
+
+    # 2. Try the quick accessor property
+    try:
+        if hasattr(response, "text") and response.text:
+            return response.text.strip()
+    except Exception:
+        pass
+
+    return ""
 
 
 def parse_feedback_response(response_text: str) -> dict:
     """
     Parses the Gemini output into structured scores and 5 feedback sections.
     Guarantees valid scores (out of 10) and clean text for all feedback sections.
-    Raises ValueError if response cannot be parsed into structured feedback.
+    Raises ValueError only if response text contains no extractable feedback.
     """
     import re
 
@@ -121,12 +155,12 @@ def parse_feedback_response(response_text: str) -> dict:
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
 
-    # Attempt to parse raw JSON
+    # Attempt 1: Parse standard JSON with strict=False
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start != -1 and end != -1:
         try:
-            data = json.loads(cleaned[start : end + 1])
+            data = json.loads(cleaned[start : end + 1], strict=False)
             grammar_score = min(10, max(1, int(data.get("grammar_score", 5))))
             clarity_score = min(10, max(1, int(data.get("clarity_score", 5))))
             content_score = min(10, max(1, int(data.get("content_score", 5))))
@@ -144,26 +178,39 @@ def parse_feedback_response(response_text: str) -> dict:
         except Exception:
             pass
 
-    # Regex extraction fallback for malformed JSON
-    def extract_val(pattern: str, text: str) -> str:
-        m = re.search(pattern, text, re.IGNORECASE)
-        return m.group(1).strip() if m else ""
+    # Attempt 2: Flexible regex extraction handling escaped quotes and multi-line values
+    def extract_field(field_name: str, text: str) -> str:
+        pattern = rf'"{field_name}"\s*:\s*"((?:\\.|[^"\\])*)"'
+        m = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if m:
+            val = m.group(1).replace(r"\"", '"').replace(r"\n", "\n")
+            return val.strip()
+        return ""
 
-    grammar_fb = extract_val(r'"grammar_feedback"\s*:\s*"([^"]+)"', cleaned)
-    clarity_fb = extract_val(r'"clarity_feedback"\s*:\s*"([^"]+)"', cleaned)
-    relevance_fb = extract_val(r'"relevance_feedback"\s*:\s*"([^"]+)"', cleaned)
-    strengths_fb = extract_val(r'"strengths"\s*:\s*"([^"]+)"', cleaned)
-    improvements_fb = extract_val(r'"improvements"\s*:\s*"([^"]+)"', cleaned)
+    def extract_score(field_name: str, text: str, default: int = 5) -> int:
+        m = re.search(rf'"{field_name}"\s*:\s*(\d+)', text, re.IGNORECASE)
+        if m:
+            try:
+                return min(10, max(1, int(m.group(1))))
+            except Exception:
+                pass
+        return default
+
+    grammar_fb = extract_field("grammar_feedback", cleaned)
+    clarity_fb = extract_field("clarity_feedback", cleaned)
+    relevance_fb = extract_field("relevance_feedback", cleaned)
+    strengths_fb = extract_field("strengths", cleaned)
+    improvements_fb = extract_field("improvements", cleaned)
 
     if grammar_fb or relevance_fb or strengths_fb or improvements_fb:
         return {
-            "grammar_score": 6,
-            "clarity_score": 6,
-            "content_score": 5,
+            "grammar_score": extract_score("grammar_score", cleaned, default=6),
+            "clarity_score": extract_score("clarity_score", cleaned, default=6),
+            "content_score": extract_score("content_score", cleaned, default=5),
             "grammar_feedback": clean_text_content(grammar_fb) if grammar_fb else "Grammar evaluated.",
             "clarity_feedback": clean_text_content(clarity_fb) if clarity_fb else "Clarity evaluated.",
             "relevance_feedback": clean_text_content(relevance_fb) if relevance_fb else "Relevance evaluated.",
-            "strengths": clean_text_content(strengths_fb) if strengths_fb else "No relevant strengths demonstrated.",
+            "strengths": clean_text_content(strengths_fb) if strengths_fb else "No relevant strengths were demonstrated in this response.",
             "improvements": clean_text_content(improvements_fb) if improvements_fb else "Please review question requirements.",
         }
 
@@ -232,10 +279,10 @@ REQUIRED JSON FORMAT:
             genai.configure(api_key=clean_api_key, transport="rest")
             _CONFIGURED_API_KEY = clean_api_key
 
-        # Optimized generation parameters for lower latency
+        # Optimized generation parameters with adequate headroom for reasoning & 5-section JSON output
         generation_config = {
             "temperature": 0.3,
-            "max_output_tokens": 700,
+            "max_output_tokens": 2048,
             "response_mime_type": "application/json",
         }
 
@@ -267,9 +314,10 @@ REQUIRED JSON FORMAT:
                 api_time_s = t_api_end - t_api_start
                 print(f"[Gemini API] Success: model={model_name} | duration={api_time_s:.2f}s")
 
-                if response and hasattr(response, "text") and response.text:
+                raw_text = extract_response_text(response)
+                if raw_text:
                     t_parse_start = time.perf_counter()
-                    parsed = parse_feedback_response(response.text)
+                    parsed = parse_feedback_response(raw_text)
                     t_parse_end = time.perf_counter()
 
                     parse_time_ms = (t_parse_end - t_parse_start) * 1000
