@@ -13,6 +13,7 @@ Features:
 import json
 import os
 import random
+import re
 import time
 import warnings
 import streamlit as st
@@ -487,6 +488,299 @@ def init_interview_session(level: str):
     st.session_state.feedbacks = {}
     st.session_state.active_level = level
     st.session_state.interview_started = True
+    st.session_state.interview_finished = False
+
+
+def extract_top_improvement_tips(feedbacks: dict) -> list:
+    """
+    Extracts top 3 concise, actionable improvement tips from the
+    'improvements' feedback across all answered interview questions.
+    """
+    candidates = []
+    seen = set()
+
+    for idx, fb in feedbacks.items():
+        imp_text = fb.get("improvements", "")
+        if not imp_text:
+            continue
+
+        # Split by newlines
+        lines = imp_text.replace("\r", "").split("\n")
+        for line in lines:
+            cleaned = line.strip()
+            # Strip bullet markers: •, -, *, 1., 2., etc.
+            cleaned = re.sub(r"^[\s•\-\*]+", "", cleaned)
+            cleaned = re.sub(r"^\d+[\.\)]\s*", "", cleaned)
+            cleaned = cleaned.strip()
+
+            # Ignore generic headers or very short fragments
+            lower = cleaned.lower()
+            if any(lower.startswith(h) for h in ["what can improve", "improvements", "areas for improvement", "tips:"]):
+                continue
+            if len(cleaned) < 18:
+                continue
+
+            # If the line contains multiple sentences or is overly long, take the first crisp sentence
+            if len(cleaned) > 160:
+                sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if len(s.strip()) >= 18]
+                if sentences:
+                    cleaned = sentences[0]
+
+            key = re.sub(r"[^\w\s]", "", cleaned.lower())[:40]
+            if key not in seen:
+                seen.add(key)
+                candidates.append(cleaned)
+
+    # If fewer than 3 tips found from lines, try splitting sentences
+    if len(candidates) < 3:
+        for idx, fb in feedbacks.items():
+            imp_text = fb.get("improvements", "")
+            for sent in re.split(r"(?<=[.!?])\s+", imp_text):
+                cleaned = re.sub(r"^[\s•\-\*\d\.\)]+", "", sent).strip()
+                if len(cleaned) >= 20 and len(cleaned) <= 160:
+                    key = re.sub(r"[^\w\s]", "", cleaned.lower())[:40]
+                    if key not in seen:
+                        seen.add(key)
+                        candidates.append(cleaned)
+                        if len(candidates) >= 3:
+                            break
+            if len(candidates) >= 3:
+                break
+
+    # High-quality standard MEXT interview tips if answers had sparse improvement points
+    fallback_tips = [
+        "Cite specific Japanese universities, professors, and academic labs relevant to your field.",
+        "Provide concrete data, project examples, and past achievements rather than general statements.",
+        "Articulate how your research will build lasting bilateral collaboration between your country and Japan."
+    ]
+
+    for fb_tip in fallback_tips:
+        if len(candidates) >= 3:
+            break
+        key = re.sub(r"[^\w\s]", "", fb_tip.lower())[:40]
+        if key not in seen:
+            seen.add(key)
+            candidates.append(fb_tip)
+
+    return candidates[:3]
+
+
+def render_interview_report():
+    """
+    Renders the 'Your Interview Report' summary screen after completing 10 questions.
+    Computes all statistics and insights in Python without extra AI calls.
+    """
+    questions = st.session_state.selected_questions
+    feedbacks = st.session_state.feedbacks
+    level = st.session_state.get("active_level", "Beginner")
+    total_q = len(questions)
+    count = len(feedbacks)
+
+    with st.sidebar:
+        st.header("⚙️ Session Controls")
+        st.write(f"**Level:** {level}")
+        st.write(f"**Status:** Completed {count} of {total_q} questions")
+        if st.button("🔄 Start New Session", key="sidebar_restart", use_container_width=True):
+            init_interview_session(level)
+            st.rerun()
+        if st.button("🏠 Exit to Welcome", key="sidebar_exit", use_container_width=True):
+            st.session_state.interview_started = False
+            st.session_state.interview_finished = False
+            st.rerun()
+
+    st.title("📊 Your Interview Report")
+    st.markdown(
+        f"**Level:** {level} &nbsp;|&nbsp; **Completed:** {count} of {total_q} questions  \n"
+        "Here is your comprehensive evaluation breakdown across English grammar, clarity, and answer content."
+    )
+
+    if count == 0:
+        st.warning("No evaluated questions found. Please start an interview session.")
+        if st.button("🚀 Start Interview", type="primary"):
+            init_interview_session(level)
+            st.rerun()
+        return
+
+    # a. Averages: Grammar, Clarity, Content and Overall Average
+    avg_grammar = round(sum(fb.get("grammar_score", 0) for fb in feedbacks.values()) / count, 1)
+    avg_clarity = round(sum(fb.get("clarity_score", 0) for fb in feedbacks.values()) / count, 1)
+    avg_content = round(sum(fb.get("content_score", 0) for fb in feedbacks.values()) / count, 1)
+    overall_avg = round((avg_grammar + avg_clarity + avg_content) / 3.0, 1)
+
+    st.markdown("<h3 style='color: #172554; margin-top: 1.25rem; margin-bottom: 0.75rem;'>Score Summary</h3>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Avg Grammar</div>
+                <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(round(avg_grammar))}; line-height: 1;">{avg_grammar}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Avg Clarity</div>
+                <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(round(avg_clarity))}; line-height: 1;">{avg_clarity}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col3:
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.1rem; text-align: center; margin-bottom: 0.5rem;">
+                <div style="font-size: 0.85rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">Avg Content</div>
+                <div style="font-size: 2.25rem; font-weight: 700; color: {get_score_color(round(avg_content))}; line-height: 1;">{avg_content}<span style="font-size: 1.1rem; font-weight: 500; color: #94A3B8;">/10</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    overall_color = get_score_color(round(overall_avg))
+    if overall_avg >= 7.0:
+        summary_text = "Outstanding interview performance! Your communication is articulate, compelling, and well-aligned with MEXT scholarship expectations."
+    elif overall_avg >= 4.0:
+        summary_text = "Good interview performance with solid foundational points. Adding more concrete specifics and research depth will make your application truly competitive."
+    else:
+        summary_text = "Answers require significant development in specificity, academic relevance, and clarity to meet MEXT committee standards."
+
+    st.markdown(
+        f"""
+        <div style="background-color: #F8FAFC; border-left: 4px solid {overall_color}; border-radius: 4px; padding: 0.85rem 1.1rem; margin-top: 0.75rem; margin-bottom: 1.5rem;">
+            <div style="font-size: 1.15rem; font-weight: 700; color: #172554;">Overall Score: {overall_avg} / 10</div>
+            <div style="color: #475569; font-size: 0.95rem; margin-top: 0.25rem; line-height: 1.4;">{summary_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # b. Best Answer & Weakest Answer
+    scores = {}
+    for idx, fb in feedbacks.items():
+        q_avg = round((fb.get("grammar_score", 0) + fb.get("clarity_score", 0) + fb.get("content_score", 0)) / 3.0, 1)
+        scores[idx] = q_avg
+
+    best_idx = max(scores, key=scores.get)
+    weak_idx = min(scores, key=scores.get)
+
+    st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>Performance Highlights</h3>", unsafe_allow_html=True)
+    c_best, c_weak = st.columns(2)
+
+    with c_best:
+        best_fb = feedbacks[best_idx]
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-top: 4px solid #14B8A6; border-radius: 8px; padding: 1.1rem; margin-bottom: 1rem; min-height: 155px;">
+                <div style="font-size: 0.8rem; font-weight: 700; color: #14B8A6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">🌟 Best Answer — Score: {scores[best_idx]}/10</div>
+                <div style="font-size: 0.95rem; font-weight: 600; color: #172554; line-height: 1.4; margin-bottom: 0.4rem;">Q{best_idx + 1}: {questions[best_idx]}</div>
+                <div style="font-size: 0.85rem; color: #64748B;">Grammar: {best_fb.get('grammar_score')}/10 &bull; Clarity: {best_fb.get('clarity_score')}/10 &bull; Content: {best_fb.get('content_score')}/10</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with c_weak:
+        weak_fb = feedbacks[weak_idx]
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-top: 4px solid #F59E0B; border-radius: 8px; padding: 1.1rem; margin-bottom: 1rem; min-height: 155px;">
+                <div style="font-size: 0.8rem; font-weight: 700; color: #F59E0B; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.35rem;">⚠️ Key Opportunity for Growth — Score: {scores[weak_idx]}/10</div>
+                <div style="font-size: 0.95rem; font-weight: 600; color: #172554; line-height: 1.4; margin-bottom: 0.4rem;">Q{weak_idx + 1}: {questions[weak_idx]}</div>
+                <div style="font-size: 0.85rem; color: #64748B;">Grammar: {weak_fb.get('grammar_score')}/10 &bull; Clarity: {weak_fb.get('clarity_score')}/10 &bull; Content: {weak_fb.get('content_score')}/10</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # c. Top 3 Improvement Tips
+    top_tips = extract_top_improvement_tips(feedbacks)
+    st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>Top 3 Improvement Tips</h3>", unsafe_allow_html=True)
+    for i, tip in enumerate(top_tips, 1):
+        st.markdown(
+            f"""
+            <div style="background-color: #F8FAFC; border-left: 4px solid #F59E0B; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.6rem;">
+                <span style="font-weight: 700; color: #172554;">Tip {i}:</span> <span style="color: #334155; font-size: 0.95rem; line-height: 1.5;">{tip}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # d. Small table / list of all 10 questions with their scores
+    st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>All Questions & Scores</h3>", unsafe_allow_html=True)
+    table_rows = []
+    for idx, q_text in enumerate(questions):
+        fb = feedbacks.get(idx)
+        if fb:
+            g = fb.get("grammar_score", "-")
+            c = fb.get("clarity_score", "-")
+            cnt = fb.get("content_score", "-")
+            q_avg = round((g + c + cnt) / 3.0, 1)
+            g_col = get_score_color(g)
+            c_col = get_score_color(c)
+            cnt_col = get_score_color(cnt)
+            avg_col = get_score_color(round(q_avg))
+            g_badge = f'<span style="color: {g_col}; font-weight: 700;">{g}</span>'
+            c_badge = f'<span style="color: {c_col}; font-weight: 700;">{c}</span>'
+            cnt_badge = f'<span style="color: {cnt_col}; font-weight: 700;">{cnt}</span>'
+            avg_badge = f'<span style="background-color: {avg_col}15; color: {avg_col}; font-weight: 700; padding: 2px 6px; border-radius: 4px;">{q_avg}</span>'
+        else:
+            g_badge = c_badge = cnt_badge = avg_badge = '<span style="color: #94A3B8;">—</span>'
+
+        table_rows.append(
+            f"""
+            <tr style="border-bottom: 1px solid #E2E8F0;">
+                <td style="padding: 10px 8px; font-weight: 600; color: #64748B; text-align: center;">Q{idx + 1}</td>
+                <td style="padding: 10px 8px; color: #172554;">{q_text}</td>
+                <td style="padding: 10px 8px; text-align: center;">{g_badge}</td>
+                <td style="padding: 10px 8px; text-align: center;">{c_badge}</td>
+                <td style="padding: 10px 8px; text-align: center;">{cnt_badge}</td>
+                <td style="padding: 10px 8px; text-align: center;">{avg_badge}</td>
+            </tr>
+            """
+        )
+
+    table_html = f"""
+    <div style="overflow-x: auto; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 1.75rem;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; background-color: #FFFFFF;">
+            <thead>
+                <tr style="background-color: #F8FAFC; border-bottom: 2px solid #CBD5E1; color: #172554;">
+                    <th style="padding: 10px 8px; text-align: center; width: 45px;">#</th>
+                    <th style="padding: 10px 8px; text-align: left;">Question</th>
+                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Grammar</th>
+                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Clarity</th>
+                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Content</th>
+                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Avg</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(table_rows)}
+            </tbody>
+        </table>
+    </div>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
+
+    # e. Buttons: "Start a New Interview Session" and "Exit to Welcome Screen"
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🔄 Start a New Interview Session", type="primary", use_container_width=True):
+            init_interview_session(level)
+            st.rerun()
+    with col_btn2:
+        if st.button("🏠 Exit to Welcome Screen", use_container_width=True):
+            st.session_state.interview_started = False
+            st.session_state.interview_finished = False
+            st.rerun()
+
+    st.divider()
+    st.caption("🎓 MEXT Scholarship Interview Practice Bot | 10-Question Interactive Session")
 
 
 def main():
@@ -543,6 +837,8 @@ def main():
     # Initialize interview session flags
     if "interview_started" not in st.session_state:
         st.session_state.interview_started = False
+    if "interview_finished" not in st.session_state:
+        st.session_state.interview_finished = False
     if "active_level" not in st.session_state:
         st.session_state.active_level = "Beginner"
 
@@ -588,6 +884,11 @@ def main():
 
         return
 
+    # Check if interview is finished and report requested
+    if st.session_state.get("interview_finished", False):
+        render_interview_report()
+        return
+
     # INTERVIEW IN PROGRESS (Displayed only after clicking Start Interview)
     level = st.session_state.active_level
 
@@ -596,11 +897,16 @@ def main():
         st.header("⚙️ Interview Controls")
         st.write(f"**Level:** {level}")
         st.write(f"**Progress:** Question {st.session_state.current_question_index + 1} of 10")
+        if len(st.session_state.feedbacks) == 10:
+            if st.button("📊 View Interview Report", use_container_width=True):
+                st.session_state.interview_finished = True
+                st.rerun()
         if st.button("🔄 Restart Interview (New 10 Questions)", use_container_width=True):
             init_interview_session(level)
             st.rerun()
         if st.button("🏠 Exit to Welcome Screen", use_container_width=True):
             st.session_state.interview_started = False
+            st.session_state.interview_finished = False
             st.rerun()
 
     # Check current question
@@ -753,24 +1059,49 @@ def main():
 
         # Detailed Feedback heading without numbering
         st.markdown("<h3 style='color: #172554; margin-top: 1.5rem; margin-bottom: 0.75rem;'>Detailed Feedback</h3>", unsafe_allow_html=True)
-        with st.expander("📝 English Grammar & Vocabulary", expanded=True):
-            st.write(fb["grammar_feedback"])
+        with st.expander("English Grammar and Vocabulary", expanded=True):
+            st.markdown(
+                f"""
+                <div style="color: #172554; line-height: 1.6; font-size: 0.95rem;">
+                    {fb["grammar_feedback"]}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        with st.expander("🎯 Clarity of Answer", expanded=True):
-            st.write(fb["clarity_feedback"])
+        with st.expander("Clarity of Answer", expanded=True):
+            st.markdown(
+                f"""
+                <div style="color: #172554; line-height: 1.6; font-size: 0.95rem;">
+                    {fb["clarity_feedback"]}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        with st.expander("📌 Relevance to the Question", expanded=True):
-            st.write(fb.get("relevance_feedback", "Evaluated based on relevance to the specific interview question."))
+        with st.expander("What Was Good", expanded=True):
+            st.markdown(
+                f"""
+                <div style="border-left: 4px solid #14B8A6; background-color: #F0FDFA; padding: 0.75rem 1rem; border-radius: 4px; color: #172554; line-height: 1.6; font-size: 0.95rem;">
+                    {fb["strengths"]}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        with st.expander("🌟 What Was Good (Strengths)", expanded=True):
-            st.write(fb["strengths"])
-
-        with st.expander("🚀 What Can Improve", expanded=True):
-            st.write(fb["improvements"])
+        with st.expander("What Can Improve", expanded=True):
+            st.markdown(
+                f"""
+                <div style="border-left: 4px solid #F59E0B; background-color: #FFFBEB; padding: 0.75rem 1rem; border-radius: 4px; color: #172554; line-height: 1.6; font-size: 0.95rem;">
+                    {fb["improvements"]}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         # If parser fallback occurred, display complete evaluator notes
         if "raw_fallback_text" in fb and fb["raw_fallback_text"]:
-            with st.expander("📄 Complete Evaluator Output", expanded=False):
+            with st.expander("Complete Evaluator Notes", expanded=False):
                 st.write(fb["raw_fallback_text"])
 
         st.divider()
@@ -781,14 +1112,19 @@ def main():
                 st.session_state.current_question_index += 1
                 st.rerun()
         else:
-            st.balloons()
-            st.success("🎉 **Congratulations! You have completed all 10 interview questions!**")
-            st.write("You have practiced a full MEXT scholarship interview simulation.")
-            if st.button("🔄 Start a New Interview Session", type="primary", use_container_width=True):
-                init_interview_session(level)
-                st.rerun()
-            if st.button("🏠 Exit to Welcome Screen", use_container_width=True):
-                st.session_state.interview_started = False
+            st.markdown(
+                """
+                <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; text-align: center;">
+                    <h4 style="color: #172554; margin: 0 0 0.5rem 0;">🎉 You have completed all 10 interview questions!</h4>
+                    <p style="color: #475569; font-size: 0.95rem; margin: 0;">
+                        Click below to view your full interview report, score breakdown, and top improvement tips.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("🏁 View Interview Report", type="primary", use_container_width=True):
+                st.session_state.interview_finished = True
                 st.rerun()
 
     st.divider()
