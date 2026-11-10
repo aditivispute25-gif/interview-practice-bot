@@ -446,12 +446,12 @@ REQUIRED JSON FORMAT:
         # Explicit RequestOptions with timeout=15.0 for fast failover without indefinite hanging
         request_options = RequestOptions(timeout=15.0, retry=None)
 
-        # Candidate models ordered by speed and stability:
-        # 1. gemini-2.5-flash: Fast and stable workhorse Flash model
-        # 2. gemini-3.5-flash-lite: Ultra-low-latency model
-        # 3. gemini-1.5-flash: Resilient legacy Flash fallback
-        # 4. gemini-3.8-flash: High-capability reasoning fallback
-        candidate_models = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-1.5-flash", "gemini-3.8-flash"]
+        # Candidate models ordered by confirmed compatibility with google-generativeai:
+        # 1. gemini-1.5-flash: Proven, fast workhorse (1-2s response time)
+        # 2. gemini-2.0-flash: Second-generation Flash model
+        # 3. gemini-2.5-flash: High-capability Flash model
+        # 4. gemini-1.5-pro: Deep reasoning fallback
+        candidate_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
         cached_model = st.session_state.get("working_gemini_model")
         if cached_model and cached_model in candidate_models:
             candidate_models.remove(cached_model)
@@ -515,13 +515,11 @@ REQUIRED JSON FORMAT:
                 attempt_log.append(f"Model: {model_name} | Status: {safe_category} | Duration: {attempt_duration:.2f}s | Detail: {str(e)[:120]}")
                 continue
 
-        # If live API models timed out or failed, fallback to structural assessment
-        # to ensure the student's interview practice is never blocked.
-        if last_error_category:
-            print(f"[Gemini API] All models failed ({last_error_category}). Activating automated structural fallback.")
-            fallback_fb = generate_fallback_evaluation(question, answer)
-            fallback_fb["is_fallback"] = True
-            return fallback_fb
+        # Always return a valid evaluation; if all live models failed, use automated structural fallback
+        print(f"[Gemini API] Activating automated structural fallback (last_error={last_error_category}).")
+        fallback_fb = generate_fallback_evaluation(question, answer)
+        fallback_fb["is_fallback"] = True
+        return fallback_fb
 
     except Exception as error:
         safe_init_category = get_safe_error_category(error)
@@ -1045,6 +1043,7 @@ def main():
                     # Save answer and feedback into session state
                     st.session_state.answers[current_idx] = answer.strip()
                     st.session_state.feedbacks[current_idx] = feedback
+                    st.rerun()
 
     # SECTION 3: AI SCORE CARDS & EVALUATION
     if current_idx in st.session_state.feedbacks:
