@@ -734,37 +734,34 @@ def render_interview_report():
             g_badge = c_badge = cnt_badge = avg_badge = '<span style="color: #94A3B8;">—</span>'
 
         table_rows.append(
-            f"""
-            <tr style="border-bottom: 1px solid #E2E8F0;">
-                <td style="padding: 10px 8px; font-weight: 600; color: #64748B; text-align: center;">Q{idx + 1}</td>
-                <td style="padding: 10px 8px; color: #172554;">{q_text}</td>
-                <td style="padding: 10px 8px; text-align: center;">{g_badge}</td>
-                <td style="padding: 10px 8px; text-align: center;">{c_badge}</td>
-                <td style="padding: 10px 8px; text-align: center;">{cnt_badge}</td>
-                <td style="padding: 10px 8px; text-align: center;">{avg_badge}</td>
-            </tr>
-            """
+            f'<tr style="border-bottom: 1px solid #E2E8F0;">'
+            f'<td style="padding: 10px 8px; font-weight: 600; color: #64748B; text-align: center; white-space: nowrap;">Q{idx + 1}</td>'
+            f'<td style="padding: 10px 10px; color: #172554; line-height: 1.4;">{q_text}</td>'
+            f'<td style="padding: 10px 6px; text-align: center; white-space: nowrap;">{g_badge}</td>'
+            f'<td style="padding: 10px 6px; text-align: center; white-space: nowrap;">{c_badge}</td>'
+            f'<td style="padding: 10px 6px; text-align: center; white-space: nowrap;">{cnt_badge}</td>'
+            f'<td style="padding: 10px 6px; text-align: center; white-space: nowrap;">{avg_badge}</td>'
+            f'</tr>'
         )
 
-    table_html = f"""
-    <div style="overflow-x: auto; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 1.75rem;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; background-color: #FFFFFF;">
-            <thead>
-                <tr style="background-color: #F8FAFC; border-bottom: 2px solid #CBD5E1; color: #172554;">
-                    <th style="padding: 10px 8px; text-align: center; width: 45px;">#</th>
-                    <th style="padding: 10px 8px; text-align: left;">Question</th>
-                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Grammar</th>
-                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Clarity</th>
-                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Content</th>
-                    <th style="padding: 10px 8px; text-align: center; width: 75px;">Avg</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(table_rows)}
-            </tbody>
-        </table>
-    </div>
-    """
+    rows_html = "".join(table_rows)
+    table_html = (
+        '<div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 1.75rem;">'
+        '<table style="width: 100%; min-width: 520px; border-collapse: collapse; font-size: 0.88rem; background-color: #FFFFFF;">'
+        '<thead>'
+        '<tr style="background-color: #F8FAFC; border-bottom: 2px solid #CBD5E1; color: #172554;">'
+        '<th style="padding: 10px 8px; text-align: center; width: 45px; white-space: nowrap;">#</th>'
+        '<th style="padding: 10px 10px; text-align: left;">Question</th>'
+        '<th style="padding: 10px 6px; text-align: center; width: 68px; white-space: nowrap;">Grammar</th>'
+        '<th style="padding: 10px 6px; text-align: center; width: 68px; white-space: nowrap;">Clarity</th>'
+        '<th style="padding: 10px 6px; text-align: center; width: 68px; white-space: nowrap;">Content</th>'
+        '<th style="padding: 10px 6px; text-align: center; width: 68px; white-space: nowrap;">Avg</th>'
+        '</tr>'
+        '</thead>'
+        f'<tbody>{rows_html}</tbody>'
+        '</table>'
+        '</div>'
+    )
     st.markdown(table_html, unsafe_allow_html=True)
 
     # e. Buttons: "Start a New Interview Session" and "Exit to Welcome Screen"
