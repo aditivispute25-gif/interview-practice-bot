@@ -57,6 +57,28 @@ def get_api_key():
     return None
 
 
+def get_groq_api_key():
+    """
+    Retrieve the Groq API key safely.
+    Checks:
+      1. Streamlit Secrets (st.secrets) - used when deploying on Streamlit Community Cloud.
+      2. Environment variables (.env file via load_dotenv) - used for local development.
+    Returns:
+        str or None: The API key if found, otherwise None.
+    """
+    try:
+        if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+            return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        pass
+
+    env_key = os.getenv("GROQ_API_KEY")
+    if env_key and env_key != "your_groq_api_key_here":
+        return env_key
+
+    return None
+
+
 def clean_text_content(text: str) -> str:
     """
     Removes any internal AI reasoning/notes (Role, Target, Constraint, Section plan)
@@ -529,6 +551,142 @@ REQUIRED JSON FORMAT:
         return fallback_fb
 
 
+def evaluate_with_groq(groq_key: str, question: str, answer: str) -> dict:
+    """
+    Calls Groq API (llama-3.3-70b-versatile with JSON mode) for ultra-low latency evaluation (<1s).
+    """
+    t_start = time.perf_counter()
+    prompt = f"""
+You are an expert, objective MEXT scholarship interview evaluator.
+Evaluate the candidate's actual submitted answer strictly against the specific interview question asked.
+
+Interview Question:
+"{question}"
+
+Candidate's Submitted Answer:
+"{answer}"
+
+STRICT EVALUATION INSTRUCTIONS:
+1. SPECIFICITY: Base your evaluation solely on the candidate's actual submitted answer. Do not assume or invent facts not present in their response.
+2. RELEVANCE & CONTENT:
+   - Critically evaluate whether the answer directly addresses the specific question asked.
+   - Detect if the answer is irrelevant, off-topic, incomplete, weak, dismissive, hostile, or shows a lack of interest in the scholarship/topic.
+   - If the answer is off-topic, inappropriate, or shows a lack of motivation/interest, assign a low Content score (1-4/10) and explicitly explain why in "relevance_feedback".
+3. OBJECTIVE STRENGTHS (NO FAKE OR GENERIC PRAISE):
+   - Highlight genuine strengths ONLY when they are actually present in the candidate's response.
+   - If the answer is weak, inappropriate, dismissive, or irrelevant, state clearly: "No relevant strengths were demonstrated in this response."
+   - Never generate generic positive praise if the candidate did not actually express it.
+4. INDEPENDENT GRAMMAR EVALUATION:
+   - Evaluate English grammar independently from content or attitude.
+   - If an answer is grammatically well-formed but inappropriate or off-topic, assign a high Grammar score (8-10/10) and do NOT invent grammar mistakes.
+   - If there are grammatical/vocabulary errors, point them out specifically with corrected phrasing.
+5. ACTIONABLE IMPROVEMENT:
+   - Provide concrete, question-specific advice explaining how a strong MEXT candidate should structure an answer to THIS specific question.
+6. FORMAT & CONCISENESS:
+   - Output ONLY valid JSON matching the exact schema below. Keep each section focused and concise (1-2 sentences).
+7. FAST PROCESSING:
+   - If the candidate's answer is very brief (under 15 words) or off-topic, assign scores immediately (assign a low Content score 1-4) and output concise feedback without complex internal deliberation.
+
+REQUIRED JSON FORMAT:
+{{
+  "grammar_score": 8,
+  "clarity_score": 7,
+  "content_score": 8,
+  "grammar_feedback": "Accurate assessment of grammar, syntax, and vocabulary.",
+  "clarity_feedback": "Assessment of sentence clarity, organization, and directness.",
+  "relevance_feedback": "Direct evaluation of whether and how well the answer addresses this specific question.",
+  "strengths": "Genuine strengths observed, or 'No relevant strengths were demonstrated in this response.' if weak.",
+  "improvements": "Specific, actionable tips tailored directly to answering this question effectively."
+}}
+"""
+    try:
+        from groq import Groq
+        clean_key = groq_key.strip().strip('"').strip("'")
+        client = Groq(api_key=clean_key, timeout=10.0)
+
+        # Candidate Groq models:
+        # 1. llama-3.3-70b-versatile (Highly intelligent, ultra-fast)
+        # 2. llama-3.1-8b-instant (Fastest ~600 T/s fallback)
+        groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+        t_prep_end = time.perf_counter()
+        prep_time_ms = (t_prep_end - t_start) * 1000
+
+        for model_name in groq_models:
+            t_api_start = time.perf_counter()
+            try:
+                print(f"[Groq API] Querying model={model_name} | timeout=10s")
+                chat_completion = client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are an expert MEXT scholarship interview coach. You must output ONLY valid JSON matching the requested schema."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    model=model_name,
+                    temperature=0.2,
+                    max_tokens=800,
+                    response_format={"type": "json_object"}
+                )
+                t_api_end = time.perf_counter()
+                api_time_s = t_api_end - t_api_start
+                print(f"[Groq API] Success: model={model_name} | duration={api_time_s:.2f}s")
+
+                raw_text = chat_completion.choices[0].message.content
+                if raw_text:
+                    t_parse_start = time.perf_counter()
+                    parsed = parse_feedback_response(raw_text)
+                    t_parse_end = time.perf_counter()
+
+                    parsed["timings"] = {
+                        "prep_ms": prep_time_ms,
+                        "api_s": api_time_s,
+                        "parse_ms": (t_parse_end - t_parse_start) * 1000,
+                        "total_s": t_parse_end - t_start,
+                        "model": f"groq/{model_name}",
+                    }
+                    return parsed
+            except Exception as e:
+                print(f"[Groq API] Failed: model={model_name} | error={e}")
+                continue
+
+    except Exception as e:
+        print(f"[Groq API] Initialization failed | error={e}")
+
+    return None
+
+
+def evaluate_answer_hybrid(current_question: str, answer_text: str) -> dict:
+    """
+    Evaluates answer using Groq (Primary ultra-fast engine) + Gemini (Reliable backup engine),
+    with automatic failover to structural evaluation.
+    """
+    groq_key = get_groq_api_key()
+    gemini_key = get_api_key()
+
+    # 1. Try Groq first if key is available (0.5 - 1.0 second response time)
+    if groq_key:
+        groq_result = evaluate_with_groq(groq_key, current_question, answer_text)
+        if groq_result:
+            return groq_result
+        print("[AI Engine] Groq did not return valid result. Falling back to Gemini.")
+
+    # 2. Try Gemini if key is available
+    if gemini_key:
+        gemini_result = evaluate_interview_answer(gemini_key, current_question, answer_text)
+        if gemini_result:
+            return gemini_result
+
+    # 3. If neither key or both failed, automated structural fallback
+    print("[AI Engine] Using automated structural fallback.")
+    fallback = generate_fallback_evaluation(current_question, answer_text)
+    fallback["is_fallback"] = True
+    return fallback
+
+
 def get_score_color(score: int) -> str:
     """
     Returns design rule color based on score:
@@ -963,6 +1121,16 @@ def main():
         st.header("⚙️ Interview Controls")
         st.write(f"**Level:** {level}")
         st.write(f"**Progress:** Question {st.session_state.current_question_index + 1} of 10")
+        
+        gemini_k = get_api_key()
+        groq_k = get_groq_api_key()
+        if groq_k and gemini_k:
+            st.caption("⚡ **AI Engine:** Groq + Gemini Backup")
+        elif groq_k:
+            st.caption("⚡ **AI Engine:** Groq (Ultra-fast)")
+        elif gemini_k:
+            st.caption("⚡ **AI Engine:** Google Gemini")
+
         if len(st.session_state.feedbacks) == 10:
             if st.button("📊 View Interview Report", use_container_width=True):
                 st.session_state.interview_finished = True
@@ -1015,21 +1183,25 @@ def main():
         label_visibility="collapsed",
     )
 
-    # API key detection check
-    api_key = get_api_key()
-    if not api_key:
+    # API key detection check (Dual Engine: Groq + Gemini)
+    gemini_key = get_api_key()
+    groq_key = get_groq_api_key()
+    has_any_key = bool(gemini_key or groq_key)
+
+    if not has_any_key:
         st.warning(
-            "⚠️ **Gemini API Key not detected!**\n\n"
-            "- **Local run:** Add `GEMINI_API_KEY=your_key` in `.env` file.\n"
-            "- **Streamlit Cloud:** Add `GEMINI_API_KEY` in Streamlit App Settings -> Secrets."
+            "⚠️ **AI API Key not detected!**\n\n"
+            "- Add `GROQ_API_KEY` (Free ultra-fast key from [console.groq.com](https://console.groq.com)) or `GEMINI_API_KEY`.\n"
+            "- **Local run:** Add in `.env` file.\n"
+            "- **Streamlit Cloud:** Add in Streamlit App Settings -> Secrets."
         )
 
     # Button: Get Feedback (blue, full width)
     if st.button("Get Feedback", type="primary", use_container_width=True):
         if not answer.strip():
             st.warning("Please type your answer before requesting feedback.")
-        elif not api_key:
-            st.error("Cannot evaluate answer without an API key. Please configure GEMINI_API_KEY.")
+        elif not has_any_key:
+            st.error("Cannot evaluate answer without an API key. Please configure GROQ_API_KEY or GEMINI_API_KEY.")
         # Optimization: Prevent duplicate API calls if this exact answer was already evaluated
         elif (
             current_idx in st.session_state.feedbacks
@@ -1037,8 +1209,8 @@ def main():
         ):
             st.info("⚡ Feedback already loaded for this answer.")
         else:
-            with st.spinner("⚡ Connecting to Gemini AI and analyzing your answer..."):
-                feedback = evaluate_interview_answer(api_key, current_question, answer.strip())
+            with st.spinner("⚡ Connecting to AI and analyzing your answer..."):
+                feedback = evaluate_answer_hybrid(current_question, answer.strip())
                 if feedback:
                     # Save answer and feedback into session state
                     st.session_state.answers[current_idx] = answer.strip()
