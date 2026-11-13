@@ -35,24 +35,103 @@ load_dotenv()
 _CONFIGURED_API_KEY = None
 
 
+def extract_clean_api_key(raw_val, prefix_type: str = "") -> str:
+    """
+    Extracts clean API key tokens even if the user pasted assignments like
+    'GROQ_API_KEY = "gsk_..."' or added surrounding quotes and spaces.
+    """
+    if not raw_val:
+        return ""
+    val = str(raw_val).strip()
+    if prefix_type == "groq":
+        m = re.search(r"gsk_[a-zA-Z0-9_\-]+", val)
+        if m:
+            return m.group(0)
+    elif prefix_type == "gemini":
+        m = re.search(r"AIzaSy[a-zA-Z0-9_\-]+", val)
+        if m:
+            return m.group(0)
+    val = re.sub(r"^[A-Z0-9_]+\s*[:=]\s*", "", val, flags=re.I).strip()
+    return val.strip('"').strip("'").strip()
+
+
+def scan_secrets_for_pattern(pattern: str):
+    """Recursively scans st.secrets for any value matching a regex pattern."""
+    try:
+        def _scan(obj):
+            if isinstance(obj, str):
+                m = re.search(pattern, obj)
+                if m:
+                    return m.group(0)
+            elif isinstance(obj, dict) or hasattr(obj, "items"):
+                for _, v in obj.items():
+                    res = _scan(v)
+                    if res:
+                        return res
+            return None
+        return _scan(st.secrets)
+    except Exception:
+        return None
+
+
+def scan_env_for_pattern(pattern: str):
+    """Scans os.environ for any value matching a regex pattern."""
+    try:
+        for _, v in os.environ.items():
+            if isinstance(v, str):
+                m = re.search(pattern, v)
+                if m:
+                    return m.group(0)
+    except Exception:
+        pass
+    return None
+
+
 def get_api_key():
     """
     Retrieve the Gemini API key safely.
     Checks:
-      1. Streamlit Secrets (st.secrets) - used when deploying on Streamlit Community Cloud.
-      2. Environment variables (.env file via load_dotenv) - used for local development.
+      1. Streamlit Secrets (st.secrets) across standard names and full secret scan.
+      2. Environment variables (.env file via load_dotenv) across standard names and env scan.
     Returns:
         str or None: The API key if found, otherwise None.
     """
+    raw_key = None
     try:
-        if "GEMINI_API_KEY" in st.secrets and st.secrets["GEMINI_API_KEY"]:
-            return st.secrets["GEMINI_API_KEY"]
+        for k in ["GEMINI_API_KEY", "gemini_api_key", "GOOGLE_API_KEY", "google_api_key", "gemini"]:
+            if k in st.secrets and st.secrets[k]:
+                raw_key = st.secrets[k]
+                break
+
+        if not raw_key:
+            for section in ["gemini", "GEMINI", "google", "GOOGLE"]:
+                if section in st.secrets and isinstance(st.secrets[section], (dict, st.secrets.__class__)):
+                    sec = st.secrets[section]
+                    for k in ["api_key", "key", "GEMINI_API_KEY"]:
+                        if k in sec and sec[k]:
+                            raw_key = sec[k]
+                            break
+
+        if not raw_key:
+            raw_key = scan_secrets_for_pattern(r"AIzaSy[a-zA-Z0-9_\-]+")
     except Exception:
         pass
 
-    env_key = os.getenv("GEMINI_API_KEY")
-    if env_key and env_key != "your_gemini_api_key_here":
-        return env_key
+    if not raw_key:
+        for env_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "gemini_api_key", "google_api_key"]:
+            env_val = os.getenv(env_name)
+            if env_val and env_val != "your_gemini_api_key_here":
+                raw_key = env_val
+                break
+
+    if not raw_key:
+        raw_key = scan_env_for_pattern(r"AIzaSy[a-zA-Z0-9_\-]+")
+
+    if raw_key:
+        cleaned = extract_clean_api_key(raw_key, "gemini")
+        if cleaned:
+            return cleaned
+        return str(raw_key).strip().strip('"').strip("'")
 
     return None
 
@@ -61,20 +140,47 @@ def get_groq_api_key():
     """
     Retrieve the Groq API key safely.
     Checks:
-      1. Streamlit Secrets (st.secrets) - used when deploying on Streamlit Community Cloud.
-      2. Environment variables (.env file via load_dotenv) - used for local development.
+      1. Streamlit Secrets (st.secrets) across standard names and full secret scan.
+      2. Environment variables (.env file via load_dotenv) across standard names and env scan.
     Returns:
         str or None: The API key if found, otherwise None.
     """
+    raw_key = None
     try:
-        if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
-            return st.secrets["GROQ_API_KEY"]
+        for k in ["GROQ_API_KEY", "groq_api_key", "GROQ_KEY", "groq_key", "groq"]:
+            if k in st.secrets and st.secrets[k]:
+                raw_key = st.secrets[k]
+                break
+
+        if not raw_key:
+            for section in ["groq", "GROQ"]:
+                if section in st.secrets and isinstance(st.secrets[section], (dict, st.secrets.__class__)):
+                    sec = st.secrets[section]
+                    for k in ["api_key", "key", "GROQ_API_KEY"]:
+                        if k in sec and sec[k]:
+                            raw_key = sec[k]
+                            break
+
+        if not raw_key:
+            raw_key = scan_secrets_for_pattern(r"gsk_[a-zA-Z0-9_\-]+")
     except Exception:
         pass
 
-    env_key = os.getenv("GROQ_API_KEY")
-    if env_key and env_key != "your_groq_api_key_here":
-        return env_key
+    if not raw_key:
+        for env_name in ["GROQ_API_KEY", "groq_api_key", "GROQ_KEY", "groq_key"]:
+            env_val = os.getenv(env_name)
+            if env_val and env_val != "your_groq_api_key_here":
+                raw_key = env_val
+                break
+
+    if not raw_key:
+        raw_key = scan_env_for_pattern(r"gsk_[a-zA-Z0-9_\-]+")
+
+    if raw_key:
+        cleaned = extract_clean_api_key(raw_key, "groq")
+        if cleaned:
+            return cleaned
+        return str(raw_key).strip().strip('"').strip("'")
 
     return None
 
@@ -517,6 +623,7 @@ REQUIRED JSON FORMAT:
                         "total_s": total_time_s,
                         "model": model_name,
                     }
+                    parsed["diagnostics"] = attempt_log
                     return parsed
                 else:
                     print(f"[Gemini API] Model {model_name} returned empty text.")
@@ -541,6 +648,7 @@ REQUIRED JSON FORMAT:
         print(f"[Gemini API] Activating automated structural fallback (last_error={last_error_category}).")
         fallback_fb = generate_fallback_evaluation(question, answer)
         fallback_fb["is_fallback"] = True
+        fallback_fb["diagnostics"] = attempt_log
         return fallback_fb
 
     except Exception as error:
@@ -548,14 +656,18 @@ REQUIRED JSON FORMAT:
         print(f"[Gemini API] Initialization failed | category={safe_init_category}. Activating fallback.")
         fallback_fb = generate_fallback_evaluation(question, answer)
         fallback_fb["is_fallback"] = True
+        fallback_fb["diagnostics"] = [f"Gemini Init Error: {safe_init_category} - {str(error)[:120]}"]
         return fallback_fb
 
 
-def evaluate_with_groq(groq_key: str, question: str, answer: str) -> dict:
+def evaluate_with_groq(groq_key: str, question: str, answer: str):
     """
     Calls Groq API (llama-3.3-70b-versatile with JSON mode) for ultra-low latency evaluation (<1s).
+    Returns:
+        tuple: (parsed_dict or None, attempt_log)
     """
     t_start = time.perf_counter()
+    attempt_log = []
     prompt = f"""
 You are an expert, objective MEXT scholarship interview evaluator.
 Evaluate the candidate's actual submitted answer strictly against the specific interview question asked.
@@ -648,15 +760,20 @@ REQUIRED JSON FORMAT:
                         "total_s": t_parse_end - t_start,
                         "model": f"groq/{model_name}",
                     }
-                    return parsed
+                    attempt_log.append(f"Model: {model_name} | Success | Duration: {api_time_s:.2f}s")
+                    return parsed, attempt_log
             except Exception as e:
-                print(f"[Groq API] Failed: model={model_name} | error={e}")
+                err_detail = f"Model: {model_name} | Status: Failed | Error: {type(e).__name__}: {str(e)[:120]}"
+                attempt_log.append(err_detail)
+                print(f"[Groq API] {err_detail}")
                 continue
 
     except Exception as e:
+        init_err = f"Groq Setup Error: {type(e).__name__}: {str(e)[:120]}"
+        attempt_log.append(init_err)
         print(f"[Groq API] Initialization failed | error={e}")
 
-    return None
+    return None, attempt_log
 
 
 def evaluate_answer_hybrid(current_question: str, answer_text: str) -> dict:
@@ -664,26 +781,41 @@ def evaluate_answer_hybrid(current_question: str, answer_text: str) -> dict:
     Evaluates answer using Groq (Primary ultra-fast engine) + Gemini (Reliable backup engine),
     with automatic failover to structural evaluation.
     """
+    diagnostics = []
     groq_key = get_groq_api_key()
     gemini_key = get_api_key()
 
     # 1. Try Groq first if key is available (0.5 - 1.0 second response time)
     if groq_key:
-        groq_result = evaluate_with_groq(groq_key, current_question, answer_text)
+        masked_groq = groq_key[:6] + "..." + groq_key[-4:] if len(groq_key) > 10 else "***"
+        groq_result, groq_logs = evaluate_with_groq(groq_key, current_question, answer_text)
+        diagnostics.append(f"Groq Engine: Key detected ({masked_groq})")
+        diagnostics.extend(groq_logs)
         if groq_result:
+            groq_result["diagnostics"] = diagnostics
             return groq_result
         print("[AI Engine] Groq did not return valid result. Falling back to Gemini.")
+    else:
+        diagnostics.append("Groq Engine: No API key detected in Streamlit Secrets or environment.")
 
     # 2. Try Gemini if key is available
     if gemini_key:
+        masked_gemini = gemini_key[:6] + "..." + gemini_key[-4:] if len(gemini_key) > 10 else "***"
+        diagnostics.append(f"Gemini Engine: Key detected ({masked_gemini})")
         gemini_result = evaluate_interview_answer(gemini_key, current_question, answer_text)
         if gemini_result:
-            return gemini_result
+            diagnostics.extend(gemini_result.get("diagnostics", []))
+            if not gemini_result.get("is_fallback"):
+                gemini_result["diagnostics"] = diagnostics
+                return gemini_result
+    else:
+        diagnostics.append("Gemini Engine: No API key detected in Streamlit Secrets or environment.")
 
     # 3. If neither key or both failed, automated structural fallback
     print("[AI Engine] Using automated structural fallback.")
     fallback = generate_fallback_evaluation(current_question, answer_text)
     fallback["is_fallback"] = True
+    fallback["diagnostics"] = diagnostics
     return fallback
 
 
@@ -1223,6 +1355,14 @@ def main():
 
         if fb.get("is_fallback"):
             st.info("ℹ️ Live API experienced a temporary connection delay. An automated structural assessment has been loaded so your practice is uninterrupted.")
+            with st.expander("🔍 Diagnostic Details", expanded=False):
+                diagnostics = fb.get("diagnostics", [])
+                if diagnostics:
+                    for d in diagnostics:
+                        st.markdown(f"- `{d}`")
+                else:
+                    st.write("No diagnostic logs recorded.")
+                st.caption("Tip: Verify your GROQ_API_KEY or GEMINI_API_KEY in Streamlit Cloud Secrets.")
         else:
             st.success("✅ Evaluation Complete!")
 
